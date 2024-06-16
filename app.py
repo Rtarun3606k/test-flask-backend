@@ -1,4 +1,4 @@
-from flask import Flask ,request ,jsonify
+from flask import Flask ,request ,jsonify,render_template
 from flask_jwt_extended import create_access_token,JWTManager,jwt_required,get_jwt_identity
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
@@ -11,7 +11,7 @@ CORS(app)
 
 # Setup the Flask-JWT-Extended extension
 app.config["JWT_SECRET_KEY"] = "super-secret"  # Change this!
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///test.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://neondb_owner:JnCXP1E6Tyzt@ep-calm-flower-a5bdgi5t.us-east-2.aws.neon.tech/neondb?sslmode=require'
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
@@ -43,8 +43,12 @@ class Blogs(db.Model):
         return f'<Blog {self.title}>'
 
 
+@app.route("/")
+def home():
+    return render_template("home.html")
 
-@app.route("/",methods=["GET"])
+
+@app.route("/d",methods=["GET"])
 @jwt_required() 
 def func():
     user_data = User.query.all()
@@ -127,57 +131,62 @@ def delete_blogs(id):
     except Exception as e:
         return jsonify({"msg":"was not able to delete blog"}),500
 
-
-
 @app.route("/token", methods=["POST"])
 def create_token():
-    username = request.json.get("username", None)
-    password = request.json.get("password", None)
-    if username == None or password == None:
+    username = request.json.get("username")
+    password = request.json.get("password")
+
+    if not username or not password:
         return jsonify({"msg": "Bad username or password"}), 401
+
     check_user_exists = User.query.filter_by(username=username).first()
+
     if check_user_exists:
-        hash  = check_user_exists.password
-        present_password = password.encode("utf-8")
-        result = bcrypt.checkpw(present_password, hash)
-        if result:
-            expires = timedelta(minutes=30)  # Token expiration time
-            access_token = create_access_token(identity=username, expires_delta=expires)
-            return jsonify(access_token=access_token)
-    return jsonify({"msg":"some erreor  occured"}) ,401
+        try:
+            # Ensure the password is decoded properly from the database
+            hashed_password = check_user_exists.password.encode('utf-8')
+            present_password = password.encode("utf-8")
 
+            if bcrypt.checkpw(present_password, hashed_password):
+                expires = timedelta(minutes=30)  # Token expiration time
+                access_token = create_access_token(identity=username, expires_delta=expires)
+                return jsonify(access_token=access_token)
+            else:
+                return jsonify({"msg": "Invalid password"}), 401
+        except ValueError:
+            return jsonify({"msg": "Invalid salt"}), 500  # Internal server error for invalid salt
 
-@app.route("/register",methods=["POST"])
+    return jsonify({"msg": "User not found"}), 401
+
+@app.route("/register", methods=["POST"])
 def register():
     username = request.json.get("username", None)
     password = request.json.get("password", None)
 
-    # Check if username or password is missing
     if not username or not password:
         return jsonify({"msg": "Username or password missing"}), 400
 
-    # Check if user already exists
     check_user_exists = User.query.filter_by(username=username).first()
     if check_user_exists:
         return jsonify({"msg": "User already exists"}), 409
 
-    # Check if password is not None
     if password is None:
         return jsonify({"msg": "Password cannot be None"}), 400
 
-    # Create a new user with a hashed password
-    bytes = password.encode('utf-8')
+    bytes_password = password.encode('utf-8')
     salt = bcrypt.gensalt()
-    hash = bcrypt.hashpw(bytes,salt)
+    hashed_password = bcrypt.hashpw(bytes_password, salt)
 
-    new_user = User(username=username, password=hash) 
-    try: # Assuming password is already hashed
+    new_user = User(username=username, password=hashed_password.decode('utf-8'))  # Store as string
+
+    try:
         db.session.add(new_user)
         db.session.commit()
     except Exception as e:
-        return jsonify({"msg":f" the following error ouucured : {e}"}), 401
+        return jsonify({"msg": f"The following error occurred: {e}"}), 401
 
     return jsonify({"msg": "User created successfully"}), 201
+
 
 
 @app.route("/upload_blogs", methods=["POST"])
